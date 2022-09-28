@@ -238,3 +238,4 @@ Outputs:
     Value: !GetAtt 'CloudMapNamespace.Id'
 
 
+
