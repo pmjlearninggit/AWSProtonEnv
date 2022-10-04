@@ -287,3 +287,4 @@ Outputs:
   OtelCollectorConfigSsmParameterName:
     Description: "Name of the SSM Parameter which contains the desired OpenTelemetry config for the AWS Distro for OpenTelemetry Collector. The parameter is manually created."
     Value: "otel-collector-config"
+
