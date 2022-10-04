@@ -1,6 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Deploy a service on AWS Fargate, hosted in a public or private subnet,
-             and accessible via a public load balancer.
+Description: Deploy a service on AWS Fargate, hosted in a public or private subnet, and accessible via a public load balancer.
 Mappings:
   TaskSize:
     x-small:
@@ -34,8 +33,8 @@ Resources:
           - GroupId
       {% endif %}
       Subnets:
-        - '{{environment.outputs.PublicSubnet1}}'
-        - '{{environment.outputs.PublicSubnet2}}'
+        - '{{ environment.outputs.PublicSubnet1 }}'
+        - '{{ environment.outputs.PublicSubnet2 }}'
       {% if service_instance.inputs.loadbalancer_type == 'application' %}
       Type: application
   LoadBalancerSecurityGroup:
@@ -48,7 +47,7 @@ Resources:
           FromPort: 80
           IpProtocol: tcp
           ToPort: 80
-      VpcId: '{{environment.outputs.VPC}}'
+      VpcId: '{{ environment.outputs.VPC }}'
   LoadBalancerSecurityGrouptoServiceSecurityGroup:
     Type: 'AWS::EC2::SecurityGroupEgress'
     Properties:
@@ -81,17 +80,22 @@ Resources:
   LoadBalancerPublicListenerECSGroup:
     Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
     Properties:
-      Port: '{{service_instance.inputs.port}}'
+      Port: '{{ service_instance.inputs.port }}'
       {% if service_instance.inputs.loadbalancer_type == 'application' %}
       Protocol: HTTP
       TargetGroupAttributes:
         - Key: stickiness.enabled
           Value: 'false'
+        - Key: deregistration_delay.timeout_seconds
+          Value: '60'
       {% else %}
       Protocol: TCP
       {% endif %}
       TargetType: ip
-      VpcId: '{{environment.outputs.VPC}}'
+      VpcId: '{{ environment.outputs.VPC }}'
+      HealthCheckIntervalSeconds: 6
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
   ServiceTaskDefTaskRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -109,14 +113,14 @@ Resources:
             Statement:
               - Effect: 'Allow'
                 Action: 'sns:Publish'
-                Resource: '{{environment.outputs.SNSTopicArn}}'
-      PermissionsBoundary: !Ref TaskRolePermissionBoundaryPolicy
+                Resource: '{{ environment.outputs.SNSTopicArn }}'
       ManagedPolicyArns:
         - !Ref BaseTaskRoleManagedPolicy
+        - !Ref AwsOtelManagedPolicy
         {{ service_instance.components.default.outputs
             | proton_cfn_iam_policy_arns }}
 
-  # Basic permissions for writing metrics and log events to Cloudwatch, this is something that would typically
+  # Basic permissions for writing metrics and log events to Cloudwatch and X-Ray, this is something that would typically
   # be required by every production-ready service.
   BaseTaskRoleManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
@@ -129,10 +133,12 @@ Resources:
               - "cloudwatch:PutMetricData"
               - "logs:PutLogEvents"
             Resource: "*"
+          - Effect: Allow
+            Action:
+              - 's3:ListAllMyBuckets'
+            Resource: "*"
 
-  # We expect our developers to never scope permissions for the task outside of these additional guard-rails
-  # for accessing dependencies.
-  TaskRolePermissionBoundaryPolicy:
+  AwsOtelManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       PolicyDocument:
@@ -140,9 +146,31 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - 's3:Get*'
-              - 's3:List*'
-              - 's3:PutObject'
+              - 'xray:GetSamplingRules'
+              - 'xray:GetSamplingTargets'
+              - 'xray:UpdateGroup'
+              - 'xray:CreateGroup'
+              - 'xray:CreateSamplingRule'
+              - 'xray:GetSamplingStatisticSummaries'
+              - 'xray:PutTelemetryRecords'
+              - 'xray:PutTraceSegments'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'logs:PutLogEvents'
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:DescribeLogStreams'
+              - 'logs:DescribeLogGroups'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'ssm:GetParameters'
+            Resource: '*'
+          - Sid: 'PrometheusRemoteWrite'
+            Effect: Allow
+            Action:
+              - 'aps:RemoteWrite'
             Resource: '*'
 
   ServiceTaskDef:
@@ -150,32 +178,60 @@ Resources:
     Properties:
       ContainerDefinitions:
         - Essential: true
-          Image: '{{service_instance.inputs.image}}'
+          Image: '{{ service_instance.inputs.image }}'
           LogConfiguration:
             LogDriver: awslogs
             Options:
               awslogs-group: !Ref ServiceTaskDefLogGroup
-              awslogs-stream-prefix: '{{service.name}}/{{service_instance.name}}'
+              awslogs-stream-prefix: '{{ service.name }}/{{ service_instance.name }}'
               awslogs-region: !Ref 'AWS::Region'
-          Name: '{{service_instance.name}}'
+          Name: '{{ service_instance.name }}'
           PortMappings:
-            - ContainerPort: '{{service_instance.inputs.port}}'
+            - ContainerPort: '{{ service_instance.inputs.port }}'
               Protocol: tcp
           Environment:
             - Name: SNS_TOPIC_ARN
-              Value: '{"ping":"{{environment.outputs.SNSTopicArn}}"}'
+              Value: '{"ping":"{{ environment.outputs.SNSTopicArn }}"}'
             - Name: SNS_REGION
-              Value: "{{environment.outputs.SNSRegion}}"
+              Value: "{{ environment.outputs.SNSRegion }}"
             - Name: BACKEND_URL
-              Value: "{{service_instance.inputs.backendurl}}"
+              Value: "{{ service_instance.inputs.backendurl }}"
             {% if service_instance.components.default.outputs | length > 0 %}
             {{ service_instance.components.default.outputs |
                 proton_cfn_ecs_task_definition_formatted_env_vars }}
             {% endif %}
-      Cpu: !FindInMap [TaskSize, {{service_instance.inputs.task_size}}, cpu]
-      ExecutionRoleArn: '{{environment.outputs.ServiceTaskDefExecutionRoleArn}}'
-      Family: '{{service.name}}_{{service_instance.name}}'
-      Memory: !FindInMap [TaskSize, {{service_instance.inputs.task_size}}, memory]
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -f http://localhost/ || exit 1" ]
+            Interval: 10
+            Retries: 4
+            StartPeriod: 60
+            Timeout: 5
+        - Essential: true
+          Image: '{{ service_instance.inputs.otel_image }}'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ServiceTaskDefLogGroup
+              awslogs-stream-prefix: '{{ service.name }}/{{ service_instance.name }}-otel-sidecar-collector'
+              awslogs-region: !Ref 'AWS::Region'
+          Name: '{{ service_instance.name }}-otel-collector'
+          Command: ["--config=/etc/ecs/ecs-amp-xray.yaml"]
+          Secrets:
+            - Name: AOT_CONFIG_CONTENT
+              ValueFrom: '{{ environment.outputs.OtelCollectorConfigSsmParameterName }}'
+          Environment:
+           - Name: OTEL_METRICS_EXPORTER
+             Value: prometheus
+           - Name: AWS_PROMETHEUS_ENDPOINT
+             Value: '{{ environment.outputs.PrometheusWorkSpaceRemoteWriteEndpoint }}'
+            {% if service_instance.components.default.outputs | length > 0 %}
+            {{ service_instance.components.default.outputs |
+                proton_cfn_ecs_task_definition_formatted_env_vars }}
+            {% endif %}
+      Cpu: !FindInMap [TaskSize, {{ service_instance.inputs.task_size }}, cpu]
+      ExecutionRoleArn: '{{ environment.outputs.ServiceTaskDefExecutionRoleArn }}'
+      Family: '{{ service.name }}_{{ service_instance.name }}'
+      Memory: !FindInMap [TaskSize, {{ service_instance.inputs.task_size }}, memory]
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
@@ -189,18 +245,18 @@ Resources:
   Service:
     Type: 'AWS::ECS::Service'
     Properties:
-      ServiceName: '{{service.name}}_{{service_instance.name}}'
-      Cluster: '{{environment.outputs.Cluster}}'
+      ServiceName: '{{ service.name }}_{{ service_instance.name }}'
+      Cluster: '{{ environment.outputs.Cluster }}'
       DeploymentConfiguration:
         MaximumPercent: 200
         MinimumHealthyPercent: 50
-      DesiredCount: '{{service_instance.inputs.desired_count}}'
+      DesiredCount: '{{ service_instance.inputs.desired_count }}'
       EnableECSManagedTags: false
       HealthCheckGracePeriodSeconds: 60
       LaunchType: FARGATE
       LoadBalancers:
-        - ContainerName: '{{service_instance.name}}'
-          ContainerPort: '{{service_instance.inputs.port}}'
+        - ContainerName: '{{ service_instance.name }}'
+          ContainerPort: '{{ service_instance.inputs.port }}'
           TargetGroupArn: !Ref LoadBalancerPublicListenerECSGroup
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -215,11 +271,11 @@ Resources:
               - GroupId
           Subnets:
           {% if service_instance.inputs.subnet_type == 'private' %}
-            - '{{environment.outputs.PrivateSubnet1}}'
-            - '{{environment.outputs.PrivateSubnet2}}'
+            - '{{ environment.outputs.PrivateSubnet1 }}'
+            - '{{ environment.outputs.PrivateSubnet2 }}'
           {% else %}
-            - '{{environment.outputs.PublicSubnet1}}'
-            - '{{environment.outputs.PublicSubnet2}}'
+            - '{{ environment.outputs.PublicSubnet1 }}'
+            - '{{ environment.outputs.PublicSubnet2 }}'
           {% endif %}
       ServiceRegistries:
         - RegistryArn: !GetAtt
@@ -236,12 +292,12 @@ Resources:
         DnsRecords:
           - TTL: 60
             Type: A
-        NamespaceId: '{{environment.outputs.CloudMapNamespaceId}}'
+        NamespaceId: '{{ environment.outputs.CloudMapNamespaceId }}'
         RoutingPolicy: MULTIVALUE
       HealthCheckCustomConfig:
         FailureThreshold: 1
-      Name: '{{service_instance.name}}.{{service.name}}'
-      NamespaceId: '{{environment.outputs.CloudMapNamespaceId}}'
+      Name: '{{ service_instance.name }}.{{ service.name }}'
+      NamespaceId: '{{ environment.outputs.CloudMapNamespaceId }}'
   ServiceSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
@@ -250,7 +306,7 @@ Resources:
         - CidrIp: 0.0.0.0/0
           Description: Allow all outbound traffic by default
           IpProtocol: '-1'
-      VpcId: '{{environment.outputs.VPC}}'
+      VpcId: '{{ environment.outputs.VPC }}'
   ServiceSecurityGroupfromLoadBalancerSecurityGroup:
     Type: 'AWS::EC2::SecurityGroupIngress'
     Properties:
@@ -277,9 +333,9 @@ Resources:
       ResourceId: !Join
         - ''
         - - service/
-          - '{{environment.outputs.Cluster}}'
+          - '{{ environment.outputs.Cluster }}'
           - /
-          - '{{service.name}}_{{service_instance.name}}'
+          - '{{ service.name }}_{{ service_instance.name }}'
       RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
       ScalableDimension: 'ecs:service:DesiredCount'
       ServiceNamespace: ecs
