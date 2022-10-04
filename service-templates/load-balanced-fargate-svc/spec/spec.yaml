@@ -1,6 +1,6 @@
 proton: ServiceSpec
 pipeline:
-  service_dir: app
+  service_dir: ecs-static-website
   dockerfile: Dockerfile
   unit_test_command: echo 'add your unit test command here'
 instances:

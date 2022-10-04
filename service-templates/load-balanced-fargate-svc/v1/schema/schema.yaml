@@ -47,20 +47,6 @@ schema:
           default: "public.ecr.aws/nginx/nginx:1.21"
           minLength: 1
           maxLength: 200
-        otel_image:
-          title: "AWS Distro for OpenTelemetry Collector image URI"
-          type: string
-          description: "The name/url of the OTEL container image"
-          default: "public.ecr.aws/aws-observability/aws-otel-collector:latest"
-          minLength: 1
-          maxLength: 200
-        otel_port:
-          title: "Port"
-          type: number
-          description: "Port number for the OTEL sidecar"
-          default: 8181
-          minimum: 0
-          maximum: 65535
         backendurl:
           title: "Backend URL"
           type: string
@@ -77,7 +63,7 @@ schema:
           title: "Application Code Directory"
           type: string
           description: "Source directory for the service"
-          default: "app"
+          default: "ecs-static-website"
           minLength: 1
           maxLength: 100
         dockerfile:

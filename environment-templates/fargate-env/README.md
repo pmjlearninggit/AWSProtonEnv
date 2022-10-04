@@ -17,17 +17,10 @@ The environment supports asynchronous service-to-service communication using a p
 3. public_subnet_two_cidr: The CIDR range for public subnet two
 4. private_subnet_one_cidr: The CIDR range for private subnet one
 5. private_subnet_two_cidr: The CIDR range for private subnet two
-6. ecs_cluster_container_insights: Enable or disable ECS Cluster Container Insights.
 
-## Observability
+## Security
 
-This environment uses the AWS Distro for OpenTelemetry for container observability. 
-The vanilla ADOT Collector container image from https://gallery.ecr.aws/aws-observability/aws-otel-collector should be deployed as a sidecar in the service templates.
-A custom built container image is not necessary as the environment specific configuration is injected through the contents of an SSM Paramater Store Parameter that at the moment must be created manually until automation is in place. 
-The parameter value must be manually populated in every environment with the configuration of choice like [prometheus-ecs-xray-config-sample.yaml](prometheus-ecs-xray-config-sample.yaml). Remember to change the values for "awsprometheusremotewrite" and "region" accordingly.
-For more information see:
- - https://aws-otel.github.io/docs/getting-started/prometheus-remote-write-exporter/ecs
- - https://aws-otel.github.io/docs/setup/ecs/config-through-ssm
+See [CONTRIBUTING](../../CONTRIBUTING.md#security-issue-notifications) for more information.
 
 ## License
 
