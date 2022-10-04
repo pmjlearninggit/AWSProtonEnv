@@ -682,3 +682,6 @@ Outputs:
   PipelineEndpoint:
     Description: The URL to access the pipeline
     Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${Pipeline}/view?region=${AWS::Region}"
+    
+    
+    
